@@ -64,9 +64,9 @@ Domain objects currently use JPA annotations directly to avoid duplicating mappi
 - SQL constraints enforce valid operation kinds, positive transaction amounts, destination rules, and failure-state consistency.
 - No sample accounts or transactions are silently seeded at startup. Test fixtures are created only in tests.
 
-### Concurrency design (planned, not yet implemented)
+### Concurrency design
 
-Credit/debit will lock the affected account row (`PESSIMISTIC_WRITE`) in a database transaction. Transfers will lock both account rows in ascending identifier order, then update both balances in a single database transaction to minimize deadlocks and guarantee atomic rollback. Distinct accounts may proceed independently except for ordinary database resource contention. Duplicate `transaction_id` conflicts will be resolved against the persisted request parameters and terminal result, not just caught and ignored.
+Credit and debit acquire a PostgreSQL row lock on the affected account. Transfers lock both accounts in ascending account-id order within one database transaction. A unique transaction-id claim, made before acquiring account locks, coordinates concurrent duplicate requests across application instances. Rejections for valid requests are committed as terminal outcomes; infrastructure failures roll back the complete database transaction.
 
 ### Trade-offs
 
@@ -76,13 +76,9 @@ PostgreSQL was chosen for persistence, row-level locks, uniqueness guarantees, a
 
 `GlobalExceptionHandler` owns HTTP error mapping. `ErrorCode` defines status and message keys; translations live in `src/main/resources/i18n/`. `Accept-Language: fa` selects Persian. Internal stack traces are never sent to clients. The domain uses structured `ApplicationException` values rather than embedding user-facing text in application logic.
 
-## Remaining work
+## Implementation status
 
-1. Implement `BalanceService` and correct credit/debit behavior with positive-amount validation and overflow protection.
-2. Implement atomic transfer, row-level lock acquisition order, and deadlock-related tests.
-3. Implement transactional idempotency and request mismatch detection.
-4. Add multi-threaded integration tests covering duplicate requests, overdrafts, transfer invariants, and failure rollback.
-5. Finalize engineering trade-offs and automated CI once all business operations are implemented.
+Credit, debit, balance lookup, and atomic transfer are implemented behind the required Java interface. PostgreSQL enforces nonnegative balances and unique transaction IDs; the service provides deterministic replay and ordered account-row locking. External REST endpoints and account-provisioning APIs are intentionally out of scope. See each step below for implementation details and limitations.
 
 ## Step 2 correction
 
@@ -130,4 +126,45 @@ Suggested commit after tests pass:
 
 ```text
 feat: implement atomic transfers with ordered account locking
+```
+
+## Step 05 — Concurrency verification and technical review
+
+The `BalanceStressIT` integration suite extends the existing unit, transfer and concurrency tests with the following evidence:
+
+- **1,000 concurrent operations** against four accounts: balanced credits, debits and transfers; the test verifies aggregate conservation (apart from explicit credits/debits), nonnegative balances and one successful transaction record per unique operation.
+- **Unrelated-account progress:** one thread holds a database row lock on account A while a separate credit on account B is required to complete before A's lock is released. This asserts there is no accidental JVM-wide account lock.
+- **Rejected retry stability:** a previously rejected debit is retried concurrently after funding; each retry must return the original failure and leave the account unchanged.
+
+The tests rely on a real PostgreSQL container and use latches for controlled contention, not sleeps. These are correctness tests, **not throughput benchmarks**. Timing assertions have CI tolerances and may be sensitive to unusually slow/shared runners. Each test creates UUID-scoped accounts and transaction IDs to avoid cross-test collisions.
+
+### Verify locally
+
+```bash
+./mvnw clean verify
+./mvnw clean verify -Pintegration
+```
+
+The GitHub Actions workflow runs both suites with Java 21 and Docker on a Linux runner. Maven's normal test phase does not run `*IT` classes; the `integration` profile enables Maven Failsafe.
+
+### Engineering decisions and known limitations
+
+| Decision | Benefit | Trade-off / limit |
+| --- | --- | --- |
+| PostgreSQL transactions and pessimistic account locks | Atomic transfers, durable state, consistent overdraft prevention | Contention serializes operations affecting the same account; requires a database |
+| Globally unique transaction ID and `ON CONFLICT DO NOTHING` | At-most-once effect for successful operations, including concurrent retries | Transaction ID is permanently reserved for the original payload |
+| Permanently stored business rejection | Deterministic retries after funds change | Callers need a new ID to submit a genuinely new attempt |
+| Fixed account lock order | Prevents lock-order inversion among service transfers | Other database workloads may still deadlock; transient failures are not retried automatically |
+| `long` minor units + `Math.addExact` | Exact calculations within defined range | Requires a documented money unit; cannot represent values larger than signed 64-bit range |
+| Single PostgreSQL transaction boundary | No partially committed transfer | Does not address cross-database or external-system distributed transactions |
+| JPA entities as domain types | Smaller codebase and fewer mapping layers | Domain is coupled to JPA; a conscious choice for this scoped challenge |
+
+**Failure semantics:** bad inputs are rejected before reserving their transaction IDs. Valid requests with business failures become `REJECTED`, and replays return the same error. An unexpected persistence or infrastructure exception should roll back the account updates and the transaction claim together; such requests may be retried. This is an architectural guarantee of the single-DB transaction, not a claim that all possible external failures have been tested.
+
+**Operational scope:** no retry/backoff for database deadlocks/timeouts, no cross-region failover, no ledger/event history beyond the transaction row, no account administration API, and no observability or performance SLA. Such features would add complexity beyond the exercise's correctness-first scope.
+
+**Suggested commit (after local verification):**
+
+```text
+test: strengthen concurrency coverage and add verification workflow
 ```
