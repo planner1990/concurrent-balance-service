@@ -1,5 +1,6 @@
 package ir.challenge.balance.balance.application;
 
+import ir.challenge.balance.shared.domain.BalanceLimits;
 import ir.challenge.balance.account.persistence.AccountRepository;
 import ir.challenge.balance.shared.error.ApplicationException;
 import ir.challenge.balance.shared.error.ErrorCode;
@@ -58,7 +59,7 @@ public class BalanceServiceImpl implements BalanceService {
         if (amount <= 0) {
             throw new ApplicationException(ErrorCode.INVALID_AMOUNT);
         }
-        if (transactionId == null || transactionId.isBlank() || transactionId.length() > 100) {
+        if (transactionId == null || transactionId.isBlank() || transactionId.length() > BalanceLimits.MAX_TRANSACTION_ID_LENGTH) {
             throw new ApplicationException(ErrorCode.INVALID_TRANSACTION_ID);
         }
     }
@@ -70,7 +71,7 @@ public class BalanceServiceImpl implements BalanceService {
     }
 
     private void validateAccountId(String accountId) {
-        if (accountId == null || accountId.isBlank() || accountId.length() > 64) {
+        if (accountId == null || accountId.isBlank() || accountId.length() > BalanceLimits.MAX_ACCOUNT_ID_LENGTH) {
             throw new ApplicationException(ErrorCode.INVALID_ACCOUNT_ID);
         }
     }

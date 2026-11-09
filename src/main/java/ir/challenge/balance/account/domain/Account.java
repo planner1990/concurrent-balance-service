@@ -1,5 +1,6 @@
 package ir.challenge.balance.account.domain;
 
+import ir.challenge.balance.shared.domain.BalanceLimits;
 import ir.challenge.balance.shared.error.ApplicationException;
 import ir.challenge.balance.shared.error.ErrorCode;
 import jakarta.persistence.Column;
@@ -43,7 +44,7 @@ public class Account {
     }
 
     public static Account open(String accountId, long openingBalance, Clock clock) {
-        if (accountId == null || accountId.isBlank() || accountId.length() > 64) {
+        if (accountId == null || accountId.isBlank() || accountId.length() > BalanceLimits.MAX_ACCOUNT_ID_LENGTH) {
             throw new ApplicationException(ErrorCode.INVALID_ACCOUNT_ID);
         }
         if (openingBalance < 0) {

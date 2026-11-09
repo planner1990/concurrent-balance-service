@@ -26,6 +26,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final String UNHANDLED_REQUEST_MESSAGE = "Unhandled request failure";
 
     private final MessageSource messageSource;
     private final Clock clock;
@@ -99,7 +100,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleUnexpectedException(
             Exception exception, HttpServletRequest request
     ) {
-        LOGGER.error("Unhandled request failure", exception);
+        LOGGER.error(UNHANDLED_REQUEST_MESSAGE, exception);
         return response(ErrorCode.INTERNAL_ERROR, request, List.of());
     }
 

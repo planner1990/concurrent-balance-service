@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -41,6 +42,8 @@ class TransferOperationIT {
     @Autowired AccountRepository accounts;
     @Autowired BalanceTransactionRepository transactions;
     @Autowired Clock clock;
+    @Autowired TransactionTemplate transactionTemplate;
+    @Autowired BalanceOperationExecutor executor;
 
     private String source;
     private String destination;
@@ -51,6 +54,28 @@ class TransferOperationIT {
         destination = UUID.randomUUID().toString();
         accounts.saveAndFlush(Account.open(source, 1000, clock));
         accounts.saveAndFlush(Account.open(destination, 500, clock));
+    }
+
+    @Test
+    void unexpectedFailureBeforeCommitRollsBackBothBalancesAndTransactionClaim() {
+        String transactionId = transactionId();
+
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
+            OperationResult result = executor.transfer(source, destination, 300, transactionId);
+            assertThat(result.error()).isNull();
+            throw new SimulatedInfrastructureFailure();
+        })).isInstanceOf(SimulatedInfrastructureFailure.class);
+
+        assertBalances(1000, 500);
+        assertThat(transactions.findById(transactionId)).isEmpty();
+
+        service.transfer(source, destination, 300, transactionId);
+        assertBalances(700, 800);
+        assertThat(transactions.findById(transactionId).orElseThrow().getStatus())
+                .isEqualTo(TransactionStatus.SUCCEEDED);
+    }
+
+    private static final class SimulatedInfrastructureFailure extends RuntimeException {
     }
 
     @Test

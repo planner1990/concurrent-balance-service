@@ -1,170 +1,116 @@
 # Concurrent Balance Service
 
-Java 21 / Spring Boot 4.1.2 implementation of the Concurrent Balance Service challenge.
+A correctness-first implementation of the **Senior Java Developer — Concurrent Balance Service** challenge using **Java 21**, **Spring Boot 4.1.2**, and **PostgreSQL 17**.
 
-> **Step 2 — persistence foundation.** Domain models, PostgreSQL schema, Flyway migrations, and repository interfaces are included. Financial commands, idempotency execution, and concurrency guarantees are **not implemented yet**. Do not submit this step as the final challenge solution.
+The required Java interface supports `credit`, `debit`, `transfer`, and `getBalance`. Financial operations use durable transaction IDs, database row locks, and a single database transaction per command. Public money-movement REST endpoints are intentionally omitted because the challenge only requires the Java interface.
 
-## Prerequisites
+## Quick start
 
-- Java 21
-- Docker Engine and Docker Compose v2 (for PostgreSQL and integration tests)
-- Maven 3.9+ or the included Maven bootstrap script
-
-## Run locally
+Prerequisites: JDK 21, Docker Engine with Compose v2, and Maven 3.9+ (or the included `mvnw` Maven bootstrap script). Docker is required for PostgreSQL integration tests.
 
 ```bash
 cp .env.example .env
-# Edit DB_PASSWORD in .env before starting PostgreSQL.
+# Set a strong, local-only DB_PASSWORD in .env before the first database initialization.
 docker compose --env-file .env up -d --wait
 set -a; . ./.env; set +a
-./mvnw clean verify
+./mvnw clean verify -Pintegration
 ./mvnw spring-boot:run
 ```
 
-Check `GET http://localhost:8080/actuator/health`. PostgreSQL must be available before starting the application. The first launch automatically applies Flyway migrations. Avoid committing `.env`.
+In another terminal, check `curl http://localhost:8080/actuator/health` (expected `{"status":"UP"}`). The local database is published to **127.0.0.1:55432** by default. If changing `DB_PORT`, also change the port in `DB_URL`. **Docker Compose reads `.env` but does not export it to the shell**; load it in each shell that starts Spring Boot. For Windows, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` in the shell before `mvnw.cmd`.
 
-By default, Docker publishes PostgreSQL on host port **55432** to avoid collisions with an existing local PostgreSQL on 5432. If you change `DB_PORT` in `.env`, also update the port in `DB_URL` to match. If you already created `.env` from the previous version, update **that file** too: set `DB_PORT=55432` and `DB_URL=jdbc:postgresql://localhost:55432/balance_db`. This port change does not modify the internal PostgreSQL port, which remains 5432.
+The application does not seed accounts. Account setup in the tests uses `Account.open`; account administration endpoints are outside this exercise. Do not commit `.env` or real credentials. Changing `DB_PASSWORD` in an existing `.env` does not reset a previously initialized PostgreSQL user's password.
 
-On Windows, set `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` in the shell environment before running `mvnw.cmd`. `docker compose --env-file .env up -d --wait` uses the local `.env` file, but Docker Compose does **not** export those values into the application's shell environment.
-
-## Tests
+## Build and verification
 
 ```bash
-./mvnw clean verify
-./mvnw clean verify -Pintegration
+./mvnw clean verify                 # Unit tests, without Docker
+./mvnw clean verify -Pintegration   # Unit + PostgreSQL Testcontainers integration tests
 ```
 
-Default tests are fast and do not need Docker. `*IT` classes are compiled even when the `integration` profile is off, so test sources must always compile cleanly. `-Pintegration` additionally runs `*IT` integration tests using PostgreSQL through Testcontainers; Docker is required. The integration test checks Flyway schema creation and Hibernate mapping validation, then persists a sample account. Tests are not a substitute for future concurrency and transactional behavior coverage.
+Tests cover input validation, successful operations, failed debits, overflow, idempotency, concurrent duplicates, opposing transfers, independent-account progress, and **1,000 concurrent mixed operations**. The rollback regression additionally forces an exception **after both in-memory account changes but before commit**, then checks neither balance nor the transaction claim was persisted; repeating the same ID must succeed normally. Unit and integration tests are run automatically by `.github/workflows/verify.yml` on push/PR.
 
-## Architecture
+Concurrency test outcomes demonstrate the scenarios tested; they are not a formal proof of absence of all races or a throughput benchmark. Timeout-dependent tests can be sensitive to overloaded CI runners.
+
+## Design at a glance
 
 ```text
 ir.challenge.balance
 ├── account
 │   ├── domain/Account.java
 │   └── persistence/AccountRepository.java
+├── balance/application
+│   ├── BalanceService.java           # Public Java contract
+│   ├── BalanceServiceImpl.java       # Validation and exception translation
+│   ├── BalanceOperationExecutor.java # @Transactional command handling
+│   ├── TransactionClaimRepository.java
+│   └── OperationResult.java
 ├── transaction
 │   ├── domain/{BalanceTransaction,OperationType,TransactionStatus}.java
 │   └── persistence/BalanceTransactionRepository.java
 └── shared
     ├── config/TimeConfiguration.java
-    └── error/{ApiError,ApplicationException,ErrorCode,...}.java
+    └── error/{ErrorCode,ApplicationException,GlobalExceptionHandler,...}.java
 ```
 
-Domain objects currently use JPA annotations directly to avoid duplicating mappings in a small challenge. This is a deliberate trade-off: the domain is not persistence-agnostic, but there are fewer layers to maintain. Business operations will be implemented through a service boundary and repositories, without putting transaction orchestration in controllers.
+The domain uses JPA annotations directly to avoid extra mapping layers in this scoped challenge. PostgreSQL schema changes are managed exclusively by Flyway (`db/migration/V1__create_accounts_and_transactions.sql`); Hibernate uses `ddl-auto: validate` and `open-in-view: false`.
 
-## Data model and invariants
+### Monetary invariants
 
-- `accounts.account_id` is the externally supplied stable identifier (VARCHAR 64).
-- `accounts.balance` is a signed 64-bit integer constrained to be nonnegative. Money is represented in the smallest indivisible unit of the system (no floating-point arithmetic).
-- `accounts.version` enables optimistic version checking in addition to future explicit database row locking.
-- `balance_transactions.transaction_id` is the global primary key. This unique constraint is the database-level basis for idempotency across threads and application instances.
-- `operation_type`, accounts, and amount identify the original request. Retries with the same ID but different parameters must be rejected by the upcoming service layer.
-- `status` is `PENDING`, `SUCCEEDED`, or `REJECTED`. Terminal business failures can retain a failure code for deterministic retries. Infrastructure errors must roll back the whole database transaction; a partially applied transfer is never committed.
-- SQL constraints enforce valid operation kinds, positive transaction amounts, destination rules, and failure-state consistency.
-- No sample accounts or transactions are silently seeded at startup. Test fixtures are created only in tests.
+- Money is an integral number of the smallest supported unit, represented as `long` (no floating point). Input amount must be positive; opening balance can be zero.
+- Debit never makes a balance negative. Credit and transfer-to-destination use overflow-safe addition. Database constraints independently require nonnegative balances and positive transaction amounts.
+- Every successful transfer deducts exactly the amount credited to its destination, inside one PostgreSQL transaction. A failed transaction cannot commit half a transfer.
+- Transaction IDs are **globally unique** across credit, debit, and transfer. A duplicate with a different operation, account, direction, or amount is rejected as `IDEMPOTENCY_CONFLICT`.
 
-### Concurrency design
+### Concurrency, atomicity and idempotency
 
-Credit and debit acquire a PostgreSQL row lock on the affected account. Transfers lock both accounts in ascending account-id order within one database transaction. A unique transaction-id claim, made before acquiring account locks, coordinates concurrent duplicate requests across application instances. Rejections for valid requests are committed as terminal outcomes; infrastructure failures roll back the complete database transaction.
+1. The service validates inputs before any database write.
+2. A `balance_transactions` row is claimed with `INSERT ... ON CONFLICT DO NOTHING` under the same database transaction as the account updates. Competing identical requests coordinate using the unique `transaction_id` constraint, including across multiple app instances.
+3. Credit/debit acquire a PostgreSQL pessimistic row lock on the account. Transfer locks two account rows in **ascending lexicographical account-ID order**, regardless of direction. Different accounts do not share a JVM-wide mutex.
+4. The command checks account existence, funds and overflow **while holding locks**, changes the balances and records a terminal result; PostgreSQL commits all changes atomically.
+5. An identical retry reads the committed transaction row and returns the same outcome without changing balances again. The service facade converts a rejected result to `ApplicationException` **after the executor's transaction has committed**.
 
-### Trade-offs
+Valid business failures (`ACCOUNT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `BALANCE_OVERFLOW`) are stored as terminal `REJECTED` results. Retrying that ID returns the same rejection, **even after funds change**. A new business attempt requires a new transaction ID. Invalid input (including same-account transfer) is rejected before reserving an ID. Unexpected exceptions roll back claim and account updates, allowing the original ID to be retried. `PENDING` is an intermediate state inside an uncommitted transaction, not an intended durable response.
 
-PostgreSQL was chosen for persistence, row-level locks, uniqueness guarantees, and atomic commit/rollback. This requires an external database and increases test setup cost versus an in-memory implementation. Flyway manages DDL; Hibernate is configured with `ddl-auto: validate` so it does not silently alter schema. No Redis, message broker, distributed lock manager, or event sourcing infrastructure has been added.
+**Same-account policy:** `transfer(A, A, ...)` fails with `SAME_ACCOUNT_TRANSFER` and reserves no transaction ID; it is not treated as a successful no-op.
 
-## Error contract
+### API and errors
 
-`GlobalExceptionHandler` owns HTTP error mapping. `ErrorCode` defines status and message keys; translations live in `src/main/resources/i18n/`. `Accept-Language: fa` selects Persian. Internal stack traces are never sent to clients. The domain uses structured `ApplicationException` values rather than embedding user-facing text in application logic.
+The mandatory `BalanceService` Java interface is implemented; no public credit/debit/transfer REST API was required or added. `GET /actuator/health` provides an operational health endpoint.
 
-## Implementation status
+`GlobalExceptionHandler` provides a central HTTP error contract for future HTTP consumers. `ErrorCode` is the stable error identifier, and localized public messages are resolved from `src/main/resources/i18n/messages*.properties` (for example with `Accept-Language: fa`). Unexpected stack traces are logged on the server and are **not** included in the response.
 
-Credit, debit, balance lookup, and atomic transfer are implemented behind the required Java interface. PostgreSQL enforces nonnegative balances and unique transaction IDs; the service provides deterministic replay and ordered account-row locking. External REST endpoints and account-provisioning APIs are intentionally out of scope. See each step below for implementation details and limitations.
+## Failure and consistency semantics
 
-## Step 2 correction
-
-- Fix compilation against Testcontainers PostgreSQL 2.x, whose `PostgreSQLContainer` is not generic.
-- Use configurable host-side PostgreSQL port 55432 to avoid clashes with other local services.
-
-## Suggested commit
-
-```text
-feat: establish PostgreSQL persistence and account domain model
-```
-
-## Step 03 — Credit and debit
-
-`BalanceService` is the application-facing Java interface. There is intentionally no public money-movement REST API yet. Account creation is a fixture/setup responsibility in this stage; production account provisioning is out of scope.
-
-- All amounts are positive integral minor units; `long` is used as required by the challenge. No floating-point calculations are performed.
-- Credit uses overflow-safe addition; debit enforces sufficient balance under a PostgreSQL `PESSIMISTIC_WRITE` row lock. Independent accounts do not share an application-wide mutex.
-- A database-unique transaction id is reserved before account locking via `INSERT ... ON CONFLICT DO NOTHING`. Concurrent requests with the same id wait for the winner to commit, then replay its committed outcome. Different payloads for the same id produce `IDEMPOTENCY_CONFLICT`.
-- Business failures (`ACCOUNT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `BALANCE_OVERFLOW`) are persisted as `REJECTED` transactions and replays return the original failure even if the balance subsequently changes. Only validated commands reserve ids; malformed requests are rejected without reservation. Infrastructure failures roll back the entire database transaction, leaving them retryable.
-- The transactional executor returns an outcome instead of throwing for business failures, so Spring commits the rejection record. The public facade throws the corresponding `ApplicationException` **after** the executor transaction commits. The global error handler and i18n remain shared.
-- This phase intentionally implements only credit, debit, and getBalance; atomic transfers are added in the next commit. 
-- Domain tests: `./mvnw clean verify`; PostgreSQL behavioral and concurrent integration tests: `./mvnw clean verify -Pintegration` (Docker required).
-
-### Explicit trade-offs
-
-The database is the cross-instance coordination point: it guarantees durable idempotency and row-level concurrency at the cost of additional I/O and lock wait times. There is no timeout/retry policy for deadlocks or connection failures yet. Consistency is prioritised over throughput. The step-03 concurrency tests use synchronized starts rather than sleeps, but do not constitute a benchmark. Transaction ids are globally unique, not per account. `REJECTED` business outcomes are permanent for their ids.
-
-
-## Step 04 — Atomic transfer
-
-`BalanceService.transfer(sourceAccountId, destinationAccountId, amount, transactionId)` moves positive integral minor units between two existing accounts. The call has no public HTTP endpoint in this stage.
-
-- **Atomicity:** Both account changes and the transaction result are part of one PostgreSQL database transaction. An infrastructure failure rolls it all back; neither side can commit alone. The destination's overflow and the source's funds are checked *before* mutating either entity.
-- **Lock ordering:** Account rows are locked in lexicographically ascending account-id order, regardless of transfer direction. No JVM-wide lock is used. This removes opposing transfer lock-order inversions among these service operations; infrastructure-level deadlocks cannot be ruled out universally.
-- **Idempotency:** The same global `transactionId` is claimed with a unique constraint before account locking. Concurrent identical requests serialize on the transaction row. Identical retries replay the recorded terminal result; changed amount, direction, destination, or operation returns `IDEMPOTENCY_CONFLICT`.
-- **Business rejections:** Insufficient funds, a missing account, and balance overflow are recorded as terminal `REJECTED` outcomes, so a retry does not unexpectedly transfer money later. The facade throws the business exception only after that outcome commits. Invalid input (including same-account transfer) is rejected before claiming the id.
-- **Same-account policy:** `transfer(A, A, amount, id)` returns `SAME_ACCOUNT_TRANSFER` and writes nothing, rather than silently succeeding. The decision avoids ambiguous no-op semantics and is validated by tests.
-- **Concurrency:** Independent accounts are not serialized by application-wide synchronization. All credit/debit/transfer paths use the same account-row locking discipline. Opposing transfers acquire both locks in the same order.
-- **Limits:** This design relies on one PostgreSQL primary for atomic transactions and does not include cross-database transfers, retries on transient SQL exceptions, or public APIs. It favors correctness over throughput under contention.
-
-Run `./mvnw clean verify` for unit tests and `./mvnw clean verify -Pintegration` for PostgreSQL/Testcontainers integration tests. New tests cover transfer persistence, replay and conflicts, insufficient funds, missing accounts, destination overflow with unchanged source, validation, concurrent opposing transfers, and concurrent duplicate requests.
-
-Suggested commit after tests pass:
-
-```text
-feat: implement atomic transfers with ordered account locking
-```
-
-## Step 05 — Concurrency verification and technical review
-
-The `BalanceStressIT` integration suite extends the existing unit, transfer and concurrency tests with the following evidence:
-
-- **1,000 concurrent operations** against four accounts: balanced credits, debits and transfers; the test verifies aggregate conservation (apart from explicit credits/debits), nonnegative balances and one successful transaction record per unique operation.
-- **Unrelated-account progress:** one thread holds a database row lock on account A while a separate credit on account B is required to complete before A's lock is released. This asserts there is no accidental JVM-wide account lock.
-- **Rejected retry stability:** a previously rejected debit is retried concurrently after funding; each retry must return the original failure and leave the account unchanged.
-
-The tests rely on a real PostgreSQL container and use latches for controlled contention, not sleeps. These are correctness tests, **not throughput benchmarks**. Timing assertions have CI tolerances and may be sensitive to unusually slow/shared runners. Each test creates UUID-scoped accounts and transaction IDs to avoid cross-test collisions.
-
-### Verify locally
-
-```bash
-./mvnw clean verify
-./mvnw clean verify -Pintegration
-```
-
-The GitHub Actions workflow runs both suites with Java 21 and Docker on a Linux runner. Maven's normal test phase does not run `*IT` classes; the `integration` profile enables Maven Failsafe.
-
-### Engineering decisions and known limitations
-
-| Decision | Benefit | Trade-off / limit |
+| Case | Outcome | Persisted transaction ID? |
 | --- | --- | --- |
-| PostgreSQL transactions and pessimistic account locks | Atomic transfers, durable state, consistent overdraft prevention | Contention serializes operations affecting the same account; requires a database |
-| Globally unique transaction ID and `ON CONFLICT DO NOTHING` | At-most-once effect for successful operations, including concurrent retries | Transaction ID is permanently reserved for the original payload |
-| Permanently stored business rejection | Deterministic retries after funds change | Callers need a new ID to submit a genuinely new attempt |
-| Fixed account lock order | Prevents lock-order inversion among service transfers | Other database workloads may still deadlock; transient failures are not retried automatically |
-| `long` minor units + `Math.addExact` | Exact calculations within defined range | Requires a documented money unit; cannot represent values larger than signed 64-bit range |
-| Single PostgreSQL transaction boundary | No partially committed transfer | Does not address cross-database or external-system distributed transactions |
-| JPA entities as domain types | Smaller codebase and fewer mapping layers | Domain is coupled to JPA; a conscious choice for this scoped challenge |
+| Successful command | All requested balances updated atomically | Yes, `SUCCEEDED` |
+| Exact retry | Original success or rejection replayed | Already present |
+| Same ID, changed payload | `IDEMPOTENCY_CONFLICT` | Original record unchanged |
+| Invalid input / same-account transfer | Validation exception; no account changes | No |
+| Valid request, business failure | No account changes; deterministic rejection | Yes, `REJECTED` |
+| Unexpected failure before commit | Whole database transaction rolls back | No |
 
-**Failure semantics:** bad inputs are rejected before reserving their transaction IDs. Valid requests with business failures become `REJECTED`, and replays return the same error. An unexpected persistence or infrastructure exception should roll back the account updates and the transaction claim together; such requests may be retried. This is an architectural guarantee of the single-DB transaction, not a claim that all possible external failures have been tested.
+The default PostgreSQL isolation level is `READ COMMITTED`. Account row locks serialize conflicting writes; transfers acquire them in stable order. `getBalance` is a single-row read and therefore observes a committed snapshot, never a partially committed transfer. Multiple separate reads of different accounts are **not** guaranteed to form one consistent multi-account snapshot unless the caller establishes an appropriate transaction/isolation strategy.
 
-**Operational scope:** no retry/backoff for database deadlocks/timeouts, no cross-region failover, no ledger/event history beyond the transaction row, no account administration API, and no observability or performance SLA. Such features would add complexity beyond the exercise's correctness-first scope.
+## Engineering trade-offs and limitations
 
-**Suggested commit (after local verification):**
+| Choice | Benefit | Cost / limitation |
+| --- | --- | --- |
+| PostgreSQL as coordination boundary | Durable IDs and atomic ACID transactions across app instances | DB dependency, I/O, lock contention |
+| Pessimistic account row locks | Predictable overdraft prevention | Hot accounts serialize; throughput decreases under contention |
+| Ordered transfer locks | Avoids transfer-to-transfer inverted account lock ordering | Cannot rule out all external DB deadlocks |
+| Terminal business rejection replay | Deterministic retries despite later balance changes | Caller needs a fresh ID for a new attempt |
+| JPA domain types | Lean implementation for a small challenge | Domain depends on persistence annotations |
+| `long` minor units | Exact arithmetic, matches required interface | Bounded range; currency/scale not modeled |
 
-```text
-test: strengthen concurrency coverage and add verification workflow
-```
+Not implemented: automatic retries/backoff for DB deadlocks/timeouts, distributed transfers, durable general-ledger accounting, account provisioning, public payment endpoints, rate limiting, custom metrics/traces, or cross-region failover. These are out of scope, not production guarantees. No Redis, Kafka, global JVM locks, or unnecessary microservices were added.
+
+## Submission checklist
+
+1. Run `./mvnw clean verify -Pintegration` with Docker and confirm `BUILD SUCCESS`.
+2. Confirm `.env` is ignored (`git check-ignore .env`), wrapper is executable (`git ls-files -s mvnw` after commit), and `git diff --check` is clean.
+3. Verify the GitHub Actions workflow succeeds and the Git history shows meaningful incremental changes.
+4. Explain why row locks are required despite `@Transactional`, how `ON CONFLICT` coordinates duplicates, why rejected outcomes commit, and how ordered locks prevent a common deadlock pattern.
+
+See [`docs/engineering-decisions.md`](docs/engineering-decisions.md) for reviewer-focused reasoning and failure boundaries.
