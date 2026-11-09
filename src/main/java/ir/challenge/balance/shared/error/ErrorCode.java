@@ -7,6 +7,8 @@ public enum ErrorCode {
     INVALID_AMOUNT(HttpStatus.BAD_REQUEST, "error.invalid_amount"),
     ACCOUNT_NOT_FOUND(HttpStatus.NOT_FOUND, "error.account_not_found"),
     INSUFFICIENT_FUNDS(HttpStatus.CONFLICT, "error.insufficient_funds"),
+    BALANCE_OVERFLOW(HttpStatus.CONFLICT, "error.balance_overflow"),
+    INVALID_TRANSACTION_ID(HttpStatus.BAD_REQUEST, "error.invalid_transaction_id"),
     IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "error.idempotency_conflict"),
     INVALID_REQUEST(HttpStatus.BAD_REQUEST, "error.invalid_request"),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "error.resource_not_found"),

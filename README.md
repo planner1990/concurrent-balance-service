@@ -94,3 +94,19 @@ PostgreSQL was chosen for persistence, row-level locks, uniqueness guarantees, a
 ```text
 feat: establish PostgreSQL persistence and account domain model
 ```
+
+## Step 03 — Credit and debit
+
+`BalanceService` is the application-facing Java interface. There is intentionally no public money-movement REST API yet. Account creation is a fixture/setup responsibility in this stage; production account provisioning is out of scope.
+
+- All amounts are positive integral minor units; `long` is used as required by the challenge. No floating-point calculations are performed.
+- Credit uses overflow-safe addition; debit enforces sufficient balance under a PostgreSQL `PESSIMISTIC_WRITE` row lock. Independent accounts do not share an application-wide mutex.
+- A database-unique transaction id is reserved before account locking via `INSERT ... ON CONFLICT DO NOTHING`. Concurrent requests with the same id wait for the winner to commit, then replay its committed outcome. Different payloads for the same id produce `IDEMPOTENCY_CONFLICT`.
+- Business failures (`ACCOUNT_NOT_FOUND`, `INSUFFICIENT_FUNDS`, `BALANCE_OVERFLOW`) are persisted as `REJECTED` transactions and replays return the original failure even if the balance subsequently changes. Only validated commands reserve ids; malformed requests are rejected without reservation. Infrastructure failures roll back the entire database transaction, leaving them retryable.
+- The transactional executor returns an outcome instead of throwing for business failures, so Spring commits the rejection record. The public facade throws the corresponding `ApplicationException` **after** the executor transaction commits. The global error handler and i18n remain shared.
+- This phase intentionally implements only credit, debit, and getBalance; atomic transfers are added in the next commit. 
+- Domain tests: `./mvnw clean verify`; PostgreSQL behavioral and concurrent integration tests: `./mvnw clean verify -Pintegration` (Docker required).
+
+### Explicit trade-offs
+
+The database is the cross-instance coordination point: it guarantees durable idempotency and row-level concurrency at the cost of additional I/O and lock wait times. There is no timeout/retry policy for deadlocks or connection failures yet. Consistency is prioritised over throughput. The step-03 concurrency tests use synchronized starts rather than sleeps, but do not constitute a benchmark. Transaction ids are globally unique, not per account. `REJECTED` business outcomes are permanent for their ids.

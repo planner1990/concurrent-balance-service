@@ -52,6 +52,31 @@ public class Account {
         return new Account(accountId, openingBalance, Instant.now(Objects.requireNonNull(clock)));
     }
 
+    public void credit(long amount, Clock clock) {
+        requirePositive(amount);
+        try {
+            balance = Math.addExact(balance, amount);
+        } catch (ArithmeticException exception) {
+            throw new ApplicationException(ErrorCode.BALANCE_OVERFLOW);
+        }
+        updatedAt = Instant.now(clock);
+    }
+
+    public void debit(long amount, Clock clock) {
+        requirePositive(amount);
+        if (balance < amount) {
+            throw new ApplicationException(ErrorCode.INSUFFICIENT_FUNDS);
+        }
+        balance -= amount;
+        updatedAt = Instant.now(clock);
+    }
+
+    private static void requirePositive(long amount) {
+        if (amount <= 0) {
+            throw new ApplicationException(ErrorCode.INVALID_AMOUNT);
+        }
+    }
+
     public String getId() {
         return id;
     }

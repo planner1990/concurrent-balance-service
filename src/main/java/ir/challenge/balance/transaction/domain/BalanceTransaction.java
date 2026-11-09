@@ -7,6 +7,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Objects;
 
 @Entity
 @Table(name = "balance_transactions")
@@ -43,6 +44,18 @@ public class BalanceTransaction {
     private Instant updatedAt;
 
     protected BalanceTransaction() {
+    }
+
+    public void succeed(Instant now) {
+        status = TransactionStatus.SUCCEEDED;
+        failureCode = null;
+        updatedAt = Objects.requireNonNull(now);
+    }
+
+    public void reject(String code, Instant now) {
+        status = TransactionStatus.REJECTED;
+        failureCode = Objects.requireNonNull(code);
+        updatedAt = Objects.requireNonNull(now);
     }
 
     public String getTransactionId() {
