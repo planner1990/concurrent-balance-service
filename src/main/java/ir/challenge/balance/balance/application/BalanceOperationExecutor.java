@@ -16,30 +16,31 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class BalanceOperationExecutor {
 
-    private final TransactionClaimRepository claims;
+    private final TransactionClaimRepository transactionClaims;
     private final BalanceTransactionRepository transactions;
     private final AccountRepository accounts;
     private final Clock clock;
 
-    public BalanceOperationExecutor(TransactionClaimRepository claims,
+    public BalanceOperationExecutor(TransactionClaimRepository transactionClaims,
             BalanceTransactionRepository transactions, AccountRepository accounts, Clock clock) {
-        this.claims = claims;
+        this.transactionClaims = transactionClaims;
         this.transactions = transactions;
         this.accounts = accounts;
         this.clock = clock;
     }
 
     @Transactional
-    public OperationResult execute(OperationType type, String accountId, long amount, String transactionId) {
+    public OperationResult executeBalanceChange(OperationType type, String accountId, long amount,
+            String transactionId) {
         Instant now = clock.instant();
-        boolean claimed = claims.claim(transactionId, type, accountId, null, amount, now);
+        boolean claimed = transactionClaims.tryClaim(transactionId, type, accountId, null, amount, now);
         BalanceTransaction transaction = transactions.findById(transactionId).orElseThrow();
 
-        if (!sameRequest(transaction, type, accountId, amount)) {
+        if (!matchesBalanceChange(transaction, type, accountId, amount)) {
             return OperationResult.rejected(ErrorCode.IDEMPOTENCY_CONFLICT);
         }
         if (!claimed) {
-            return replay(transaction);
+            return replayResult(transaction);
         }
 
         Account account = accounts.findByIdForUpdate(accountId).orElse(null);
@@ -68,15 +69,15 @@ public class BalanceOperationExecutor {
     public OperationResult transfer(String sourceAccountId, String destinationAccountId, long amount,
             String transactionId) {
         Instant now = clock.instant();
-        boolean claimed = claims.claim(transactionId, OperationType.TRANSFER,
+        boolean claimed = transactionClaims.tryClaim(transactionId, OperationType.TRANSFER,
                 sourceAccountId, destinationAccountId, amount, now);
         BalanceTransaction transaction = transactions.findById(transactionId).orElseThrow();
 
-        if (!sameTransfer(transaction, sourceAccountId, destinationAccountId, amount)) {
+        if (!matchesTransfer(transaction, sourceAccountId, destinationAccountId, amount)) {
             return OperationResult.rejected(ErrorCode.IDEMPOTENCY_CONFLICT);
         }
         if (!claimed) {
-            return replay(transaction);
+            return replayResult(transaction);
         }
 
         String firstId = sourceAccountId.compareTo(destinationAccountId) < 0
@@ -111,7 +112,7 @@ public class BalanceOperationExecutor {
         return OperationResult.succeeded();
     }
 
-    private boolean sameTransfer(BalanceTransaction transaction, String sourceAccountId,
+    private boolean matchesTransfer(BalanceTransaction transaction, String sourceAccountId,
             String destinationAccountId, long amount) {
         return transaction.getOperationType() == OperationType.TRANSFER
                 && transaction.getSourceAccountId().equals(sourceAccountId)
@@ -119,14 +120,15 @@ public class BalanceOperationExecutor {
                 && transaction.getAmount() == amount;
     }
 
-    private boolean sameRequest(BalanceTransaction transaction, OperationType type, String accountId, long amount) {
+    private boolean matchesBalanceChange(BalanceTransaction transaction, OperationType type,
+            String accountId, long amount) {
         return transaction.getOperationType() == type
                 && transaction.getSourceAccountId().equals(accountId)
                 && transaction.getDestinationAccountId() == null
                 && transaction.getAmount() == amount;
     }
 
-    private OperationResult replay(BalanceTransaction transaction) {
+    private OperationResult replayResult(BalanceTransaction transaction) {
         if (transaction.getStatus() == TransactionStatus.SUCCEEDED) {
             return OperationResult.succeeded();
         }

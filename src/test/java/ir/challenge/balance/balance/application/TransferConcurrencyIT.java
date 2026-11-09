@@ -44,7 +44,7 @@ class TransferConcurrencyIT {
     @Autowired Clock clock;
 
     @Test
-    void opposingTransfersCompleteWithoutDeadlockAndPreserveSum() throws Exception {
+    void opposingTransfersAvoidDeadlock() throws Exception {
         String first = UUID.randomUUID().toString();
         String second = UUID.randomUUID().toString();
         accounts.saveAndFlush(Account.open(first, 1000, clock));
@@ -74,7 +74,7 @@ class TransferConcurrencyIT {
     }
 
     @Test
-    void simultaneousRetryOfTransferAppliesOnlyOnce() throws Exception {
+    void concurrentTransferRetriesApplyOnce() throws Exception {
         String first = UUID.randomUUID().toString();
         String second = UUID.randomUUID().toString();
         String transactionId = "TX-" + UUID.randomUUID();

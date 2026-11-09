@@ -113,4 +113,4 @@ Not implemented: automatic retries/backoff for DB deadlocks/timeouts, distribute
 3. Verify the GitHub Actions workflow succeeds and the Git history shows meaningful incremental changes.
 4. Explain why row locks are required despite `@Transactional`, how `ON CONFLICT` coordinates duplicates, why rejected outcomes commit, and how ordered locks prevent a common deadlock pattern.
 
-See [`docs/engineering-decisions.md`](docs/engineering-decisions.md) for reviewer-focused reasoning and failure boundaries.
+See [`docs/engineering-decisions.md`](docs/engineering-decisions.md) for reviewer-focused reasoning and failure boundaries, and [`docs/submission-review.md`](docs/submission-review.md) for the requirements-to-tests checklist and final submission checks.

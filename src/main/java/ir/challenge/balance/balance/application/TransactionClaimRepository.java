@@ -24,7 +24,7 @@ public class TransactionClaimRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public boolean claim(String transactionId, OperationType type, String sourceAccountId,
+    public boolean tryClaim(String transactionId, OperationType type, String sourceAccountId,
             String destinationAccountId, long amount, Instant now) {
         Timestamp timestamp = Timestamp.from(now);
         return jdbcTemplate.update(CLAIM_SQL, transactionId, type.name(), sourceAccountId,

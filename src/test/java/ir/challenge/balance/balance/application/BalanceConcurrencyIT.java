@@ -72,7 +72,7 @@ class BalanceConcurrencyIT {
     }
 
     @Test
-    void duplicateConcurrentCreditsOnlyApplyOnce() throws Exception {
+    void concurrentDuplicateCreditsApplyOnce() throws Exception {
         String accountId = UUID.randomUUID().toString();
         String txId = "TX-" + UUID.randomUUID();
         accounts.saveAndFlush(Account.open(accountId, 0, clock));

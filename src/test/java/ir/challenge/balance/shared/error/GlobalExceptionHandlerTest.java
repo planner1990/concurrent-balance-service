@@ -43,7 +43,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void applicationExceptionUsesConsistentHttpStatusAndPayload() {
+    void applicationErrorsUseConsistentResponse() {
         ResponseEntity<ApiError> response = handler.handleApplicationException(
                 new ApplicationException(ErrorCode.CONFLICT), request
         );
@@ -70,7 +70,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void unexpectedExceptionDoesNotExposeTechnicalDetails() {
+    void unexpectedErrorsHideInternalDetails() {
         ResponseEntity<ApiError> response = handler.handleUnexpectedException(
                 new IllegalStateException("secret infrastructure detail"), request
         );

@@ -16,7 +16,7 @@ class BalanceServiceImplTest {
     private final BalanceServiceImpl service = new BalanceServiceImpl(accounts, executor);
 
     @Test
-    void rejectsInvalidAmountBeforePersistence() {
+    void invalidAmountSkipsPersistence() {
         assertThatThrownBy(() -> service.credit("A", 0, "TX-1"))
                 .isInstanceOf(ApplicationException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INVALID_AMOUNT);
@@ -24,7 +24,7 @@ class BalanceServiceImplTest {
     }
 
     @Test
-    void rejectsInvalidTransactionIdBeforePersistence() {
+    void invalidTransactionIdSkipsPersistence() {
         assertThatThrownBy(() -> service.debit("A", 100, " "))
                 .isInstanceOf(ApplicationException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INVALID_TRANSACTION_ID);
@@ -32,14 +32,14 @@ class BalanceServiceImplTest {
     }
 
     @Test
-    void rejectsInvalidAccountIdBeforePersistence() {
+    void invalidAccountIdSkipsPersistence() {
         assertThatThrownBy(() -> service.credit(" ", 100, "TX-1"))
                 .isInstanceOf(ApplicationException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INVALID_ACCOUNT_ID);
         verifyNoInteractions(executor);
     }
     @Test
-    void rejectsSameAccountTransferBeforePersistence() {
+    void sameAccountTransferSkipsPersistence() {
         assertThatThrownBy(() -> service.transfer("A", "A", 100, "TX-1"))
                 .isInstanceOf(ApplicationException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.SAME_ACCOUNT_TRANSFER);
@@ -47,7 +47,7 @@ class BalanceServiceImplTest {
     }
 
     @Test
-    void rejectsInvalidTransferAmountBeforePersistence() {
+    void invalidTransferAmountSkipsPersistence() {
         assertThatThrownBy(() -> service.transfer("A", "B", 0, "TX-1"))
                 .isInstanceOf(ApplicationException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INVALID_AMOUNT);

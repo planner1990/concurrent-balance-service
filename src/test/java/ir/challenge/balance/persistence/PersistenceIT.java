@@ -37,7 +37,7 @@ class PersistenceIT {
     private AccountRepository accountRepository;
 
     @Test
-    void flywayCreatesSchemaAndJpaCanPersistAccount() {
+    void flywaySchemaSupportsAccountPersistence() {
         Account account = Account.open("ACC-IT-001", 1200, Clock.system(ZoneOffset.UTC));
         accountRepository.saveAndFlush(account);
 

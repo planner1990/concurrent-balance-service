@@ -57,7 +57,7 @@ class TransferOperationIT {
     }
 
     @Test
-    void unexpectedFailureBeforeCommitRollsBackBothBalancesAndTransactionClaim() {
+    void transferFailureRollsBackBalancesAndClaim() {
         String transactionId = transactionId();
 
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
@@ -99,7 +99,7 @@ class TransferOperationIT {
     }
 
     @Test
-    void sameTransactionIdWithDifferentPayloadOrOperationIsRejected() {
+    void reusedIdWithDifferentRequestIsRejected() {
         String transactionId = transactionId();
         service.transfer(source, destination, 300, transactionId);
         assertError(ErrorCode.IDEMPOTENCY_CONFLICT,
@@ -138,7 +138,7 @@ class TransferOperationIT {
     }
 
     @Test
-    void missingSourceOrDestinationDoesNotChangeBalance() {
+    void missingTransferAccountPreservesBalances() {
         assertError(ErrorCode.ACCOUNT_NOT_FOUND,
                 () -> service.transfer(source, UUID.randomUUID().toString(), 50, transactionId()));
         assertError(ErrorCode.ACCOUNT_NOT_FOUND,
@@ -147,7 +147,7 @@ class TransferOperationIT {
     }
 
     @Test
-    void sameAccountIsRejectedWithoutReservingTransactionId() {
+    void sameAccountTransferDoesNotClaimId() {
         String transactionId = transactionId();
         assertError(ErrorCode.SAME_ACCOUNT_TRANSFER,
                 () -> service.transfer(source, source, 100, transactionId));
@@ -156,7 +156,7 @@ class TransferOperationIT {
     }
 
     @Test
-    void invalidAmountOrAccountIsRejectedWithoutReservingTransactionId() {
+    void invalidTransferDoesNotClaimTransactionId() {
         String transactionId = transactionId();
         assertError(ErrorCode.INVALID_AMOUNT,
                 () -> service.transfer(source, destination, 0, transactionId));

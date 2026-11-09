@@ -60,7 +60,7 @@ class BalanceStressIT {
     @Autowired Clock clock;
 
     @Test
-    void thousandConcurrentMixedOperationsPreserveAllBalances() throws Exception {
+    void mixedConcurrentOperationsPreserveBalances() throws Exception {
         List<String> ids = new ArrayList<>();
         for (int accountIndex = 0; accountIndex < ACCOUNTS; accountIndex++) {
             String id = UUID.randomUUID().toString();
@@ -110,7 +110,7 @@ class BalanceStressIT {
     }
 
     @Test
-    void independentAccountIsNotBlockedByAnotherAccountsRowLock() throws Exception {
+    void unrelatedAccountsProceedIndependently() throws Exception {
         String locked = UUID.randomUUID().toString();
         String independent = UUID.randomUUID().toString();
         accounts.saveAndFlush(Account.open(locked, 100, clock));
@@ -144,7 +144,7 @@ class BalanceStressIT {
     }
 
     @Test
-    void concurrentRetriesOfRejectedDebitRemainRejectedAfterFunding() throws Exception {
+    void rejectedDebitStaysRejectedDuringRetries() throws Exception {
         String id = UUID.randomUUID().toString();
         String transactionId = TX_PREFIX + UUID.randomUUID();
         accounts.saveAndFlush(Account.open(id, 50, clock));
