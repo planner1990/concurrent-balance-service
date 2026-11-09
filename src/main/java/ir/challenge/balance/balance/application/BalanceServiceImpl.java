@@ -29,6 +29,17 @@ public class BalanceServiceImpl implements BalanceService {
     }
 
     @Override
+    public void transfer(String sourceAccountId, String destinationAccountId, long amount, String transactionId) {
+        validateAccountId(sourceAccountId);
+        validateAccountId(destinationAccountId);
+        if (sourceAccountId.equals(destinationAccountId)) {
+            throw new ApplicationException(ErrorCode.SAME_ACCOUNT_TRANSFER);
+        }
+        validateAmountAndTransactionId(amount, transactionId);
+        handleResult(executor.transfer(sourceAccountId, destinationAccountId, amount, transactionId));
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public long getBalance(String accountId) {
         validateAccountId(accountId);
@@ -39,13 +50,20 @@ public class BalanceServiceImpl implements BalanceService {
 
     private void execute(OperationType type, String accountId, long amount, String transactionId) {
         validateAccountId(accountId);
+        validateAmountAndTransactionId(amount, transactionId);
+        handleResult(executor.execute(type, accountId, amount, transactionId));
+    }
+
+    private void validateAmountAndTransactionId(long amount, String transactionId) {
         if (amount <= 0) {
             throw new ApplicationException(ErrorCode.INVALID_AMOUNT);
         }
         if (transactionId == null || transactionId.isBlank() || transactionId.length() > 100) {
             throw new ApplicationException(ErrorCode.INVALID_TRANSACTION_ID);
         }
-        OperationResult result = executor.execute(type, accountId, amount, transactionId);
+    }
+
+    private void handleResult(OperationResult result) {
         if (result.error() != null) {
             throw new ApplicationException(result.error());
         }

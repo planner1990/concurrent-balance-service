@@ -110,3 +110,24 @@ feat: establish PostgreSQL persistence and account domain model
 ### Explicit trade-offs
 
 The database is the cross-instance coordination point: it guarantees durable idempotency and row-level concurrency at the cost of additional I/O and lock wait times. There is no timeout/retry policy for deadlocks or connection failures yet. Consistency is prioritised over throughput. The step-03 concurrency tests use synchronized starts rather than sleeps, but do not constitute a benchmark. Transaction ids are globally unique, not per account. `REJECTED` business outcomes are permanent for their ids.
+
+
+## Step 04 — Atomic transfer
+
+`BalanceService.transfer(sourceAccountId, destinationAccountId, amount, transactionId)` moves positive integral minor units between two existing accounts. The call has no public HTTP endpoint in this stage.
+
+- **Atomicity:** Both account changes and the transaction result are part of one PostgreSQL database transaction. An infrastructure failure rolls it all back; neither side can commit alone. The destination's overflow and the source's funds are checked *before* mutating either entity.
+- **Lock ordering:** Account rows are locked in lexicographically ascending account-id order, regardless of transfer direction. No JVM-wide lock is used. This removes opposing transfer lock-order inversions among these service operations; infrastructure-level deadlocks cannot be ruled out universally.
+- **Idempotency:** The same global `transactionId` is claimed with a unique constraint before account locking. Concurrent identical requests serialize on the transaction row. Identical retries replay the recorded terminal result; changed amount, direction, destination, or operation returns `IDEMPOTENCY_CONFLICT`.
+- **Business rejections:** Insufficient funds, a missing account, and balance overflow are recorded as terminal `REJECTED` outcomes, so a retry does not unexpectedly transfer money later. The facade throws the business exception only after that outcome commits. Invalid input (including same-account transfer) is rejected before claiming the id.
+- **Same-account policy:** `transfer(A, A, amount, id)` returns `SAME_ACCOUNT_TRANSFER` and writes nothing, rather than silently succeeding. The decision avoids ambiguous no-op semantics and is validated by tests.
+- **Concurrency:** Independent accounts are not serialized by application-wide synchronization. All credit/debit/transfer paths use the same account-row locking discipline. Opposing transfers acquire both locks in the same order.
+- **Limits:** This design relies on one PostgreSQL primary for atomic transactions and does not include cross-database transfers, retries on transient SQL exceptions, or public APIs. It favors correctness over throughput under contention.
+
+Run `./mvnw clean verify` for unit tests and `./mvnw clean verify -Pintegration` for PostgreSQL/Testcontainers integration tests. New tests cover transfer persistence, replay and conflicts, insufficient funds, missing accounts, destination overflow with unchanged source, validation, concurrent opposing transfers, and concurrent duplicate requests.
+
+Suggested commit after tests pass:
+
+```text
+feat: implement atomic transfers with ordered account locking
+```

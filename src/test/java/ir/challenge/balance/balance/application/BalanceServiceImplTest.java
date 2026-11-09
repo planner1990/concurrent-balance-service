@@ -38,4 +38,20 @@ class BalanceServiceImplTest {
                 .extracting("errorCode").isEqualTo(ErrorCode.INVALID_ACCOUNT_ID);
         verifyNoInteractions(executor);
     }
+    @Test
+    void rejectsSameAccountTransferBeforePersistence() {
+        assertThatThrownBy(() -> service.transfer("A", "A", 100, "TX-1"))
+                .isInstanceOf(ApplicationException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.SAME_ACCOUNT_TRANSFER);
+        verifyNoInteractions(executor);
+    }
+
+    @Test
+    void rejectsInvalidTransferAmountBeforePersistence() {
+        assertThatThrownBy(() -> service.transfer("A", "B", 0, "TX-1"))
+                .isInstanceOf(ApplicationException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.INVALID_AMOUNT);
+        verifyNoInteractions(executor);
+    }
+
 }
