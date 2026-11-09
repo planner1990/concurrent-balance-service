@@ -23,6 +23,8 @@ set -a; . ./.env; set +a
 
 Check `GET http://localhost:8080/actuator/health`. PostgreSQL must be available before starting the application. The first launch automatically applies Flyway migrations. Avoid committing `.env`.
 
+By default, Docker publishes PostgreSQL on host port **55432** to avoid collisions with an existing local PostgreSQL on 5432. If you change `DB_PORT` in `.env`, also update the port in `DB_URL` to match. If you already created `.env` from the previous version, update **that file** too: set `DB_PORT=55432` and `DB_URL=jdbc:postgresql://localhost:55432/balance_db`. This port change does not modify the internal PostgreSQL port, which remains 5432.
+
 On Windows, set `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` in the shell environment before running `mvnw.cmd`. `docker compose --env-file .env up -d --wait` uses the local `.env` file, but Docker Compose does **not** export those values into the application's shell environment.
 
 ## Tests
@@ -32,7 +34,7 @@ On Windows, set `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` in the shell environme
 ./mvnw clean verify -Pintegration
 ```
 
-Default tests are fast and do not need Docker. `-Pintegration` additionally runs `*IT` integration tests using PostgreSQL through Testcontainers; Docker is required. The integration test checks Flyway schema creation and Hibernate mapping validation, then persists a sample account. Tests are not a substitute for future concurrency and transactional behavior coverage.
+Default tests are fast and do not need Docker. `*IT` classes are compiled even when the `integration` profile is off, so test sources must always compile cleanly. `-Pintegration` additionally runs `*IT` integration tests using PostgreSQL through Testcontainers; Docker is required. The integration test checks Flyway schema creation and Hibernate mapping validation, then persists a sample account. Tests are not a substitute for future concurrency and transactional behavior coverage.
 
 ## Architecture
 
@@ -81,6 +83,11 @@ PostgreSQL was chosen for persistence, row-level locks, uniqueness guarantees, a
 3. Implement transactional idempotency and request mismatch detection.
 4. Add multi-threaded integration tests covering duplicate requests, overdrafts, transfer invariants, and failure rollback.
 5. Finalize engineering trade-offs and automated CI once all business operations are implemented.
+
+## Step 2 correction
+
+- Fix compilation against Testcontainers PostgreSQL 2.x, whose `PostgreSQLContainer` is not generic.
+- Use configurable host-side PostgreSQL port 55432 to avoid clashes with other local services.
 
 ## Suggested commit
 

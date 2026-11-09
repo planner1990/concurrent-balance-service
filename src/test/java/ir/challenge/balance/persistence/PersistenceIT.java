@@ -21,7 +21,7 @@ class PersistenceIT {
 
     @Container
     private static final PostgreSQLContainer POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine")
+            new PostgreSQLContainer("postgres:17-alpine")
                     .withDatabaseName("balance_test")
                     .withUsername("balance_test")
                     .withPassword("balance_test");
