@@ -1,95 +1,89 @@
 # Concurrent Balance Service
 
-A Java 21 / Spring Boot coding challenge focused on correctness under concurrency, transaction consistency, and idempotency.
+Java 21 / Spring Boot 4.1.2 implementation of the Concurrent Balance Service challenge.
 
-> **Implementation status — Step 1:** Project bootstrap and shared error infrastructure only. Account operations, persistence, concurrency control, idempotency, and their integration tests have **not** been implemented yet.
+> **Step 2 — persistence foundation.** Domain models, PostgreSQL schema, Flyway migrations, and repository interfaces are included. Financial commands, idempotency execution, and concurrency guarantees are **not implemented yet**. Do not submit this step as the final challenge solution.
 
 ## Prerequisites
 
-- JDK 21
-- Internet access for Maven dependencies on the first build
-- Maven 3.9+ **or** `curl` + `unzip` on Unix-based systems / PowerShell on Windows (the bootstrap scripts obtain Maven automatically)
+- Java 21
+- Docker Engine and Docker Compose v2 (for PostgreSQL and integration tests)
+- Maven 3.9+ or the included Maven bootstrap script
 
-No database or Docker installation is required for Step 1.
-
-## Build and run
+## Run locally
 
 ```bash
+cp .env.example .env
+# Edit DB_PASSWORD in .env before starting PostgreSQL.
+docker compose --env-file .env up -d --wait
+set -a; . ./.env; set +a
 ./mvnw clean verify
 ./mvnw spring-boot:run
 ```
 
-On Windows:
+Check `GET http://localhost:8080/actuator/health`. PostgreSQL must be available before starting the application. The first launch automatically applies Flyway migrations. Avoid committing `.env`.
 
-```powershell
-.\mvnw.cmd clean verify
-.\mvnw.cmd spring-boot:run
+On Windows, set `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` in the shell environment before running `mvnw.cmd`. `docker compose --env-file .env up -d --wait` uses the local `.env` file, but Docker Compose does **not** export those values into the application's shell environment.
+
+## Tests
+
+```bash
+./mvnw clean verify
+./mvnw clean verify -Pintegration
 ```
 
-The health endpoint is available at `GET http://localhost:8080/actuator/health` and should return `{"status":"UP"}`.
+Default tests are fast and do not need Docker. `-Pintegration` additionally runs `*IT` integration tests using PostgreSQL through Testcontainers; Docker is required. The integration test checks Flyway schema creation and Hibernate mapping validation, then persists a sample account. Tests are not a substitute for future concurrency and transactional behavior coverage.
 
-The initial build requires access to Maven Central. The provided bootstrap scripts use an installed Maven binary when available; otherwise they install Maven 3.9.11 under `.mvn/local/` (ignored by Git).
-
-## Structure
+## Architecture
 
 ```text
-src/main/java/ir/challenge/balance/
-├── ConcurrentBalanceApplication.java
-└── shared/
+ir.challenge.balance
+├── account
+│   ├── domain/Account.java
+│   └── persistence/AccountRepository.java
+├── transaction
+│   ├── domain/{BalanceTransaction,OperationType,TransactionStatus}.java
+│   └── persistence/BalanceTransactionRepository.java
+└── shared
     ├── config/TimeConfiguration.java
-    └── error/
-        ├── ApiError.java
-        ├── ApplicationException.java
-        ├── ErrorCode.java
-        ├── FieldViolation.java
-        └── GlobalExceptionHandler.java
-src/main/resources/
-├── application.yml
-└── i18n/
-    ├── messages.properties
-    └── messages_fa.properties
-src/test/java/
-└── ir/challenge/balance/...
+    └── error/{ApiError,ApplicationException,ErrorCode,...}.java
 ```
 
-Future features will be grouped by business capability (account, transaction) rather than turning `shared` into a catch-all package.
+Domain objects currently use JPA annotations directly to avoid duplicating mappings in a small challenge. This is a deliberate trade-off: the domain is not persistence-agnostic, but there are fewer layers to maintain. Business operations will be implemented through a service boundary and repositories, without putting transaction orchestration in controllers.
 
-## Error handling contract
+## Data model and invariants
 
-The REST boundary uses a single `@RestControllerAdvice` to convert application, validation, malformed-body and unexpected errors into a consistent response. Error identifiers are enum values, user-facing messages resolve from message bundles, and HTTP statuses are defined with error codes.
+- `accounts.account_id` is the externally supplied stable identifier (VARCHAR 64).
+- `accounts.balance` is a signed 64-bit integer constrained to be nonnegative. Money is represented in the smallest indivisible unit of the system (no floating-point arithmetic).
+- `accounts.version` enables optimistic version checking in addition to future explicit database row locking.
+- `balance_transactions.transaction_id` is the global primary key. This unique constraint is the database-level basis for idempotency across threads and application instances.
+- `operation_type`, accounts, and amount identify the original request. Retries with the same ID but different parameters must be rejected by the upcoming service layer.
+- `status` is `PENDING`, `SUCCEEDED`, or `REJECTED`. Terminal business failures can retain a failure code for deterministic retries. Infrastructure errors must roll back the whole database transaction; a partially applied transfer is never committed.
+- SQL constraints enforce valid operation kinds, positive transaction amounts, destination rules, and failure-state consistency.
+- No sample accounts or transactions are silently seeded at startup. Test fixtures are created only in tests.
 
-Illustrative payload (endpoint business errors are not wired up yet):
+### Concurrency design (planned, not yet implemented)
 
-```json
-{
-  "code": "CONFLICT",
-  "message": "The request conflicts with the current state.",
-  "timestamp": "2026-01-01T00:00:00Z",
-  "path": "/api/v1/accounts",
-  "violations": []
-}
+Credit/debit will lock the affected account row (`PESSIMISTIC_WRITE`) in a database transaction. Transfers will lock both account rows in ascending identifier order, then update both balances in a single database transaction to minimize deadlocks and guarantee atomic rollback. Distinct accounts may proceed independently except for ordinary database resource contention. Duplicate `transaction_id` conflicts will be resolved against the persisted request parameters and terminal result, not just caught and ignored.
+
+### Trade-offs
+
+PostgreSQL was chosen for persistence, row-level locks, uniqueness guarantees, and atomic commit/rollback. This requires an external database and increases test setup cost versus an in-memory implementation. Flyway manages DDL; Hibernate is configured with `ddl-auto: validate` so it does not silently alter schema. No Redis, message broker, distributed lock manager, or event sourcing infrastructure has been added.
+
+## Error contract
+
+`GlobalExceptionHandler` owns HTTP error mapping. `ErrorCode` defines status and message keys; translations live in `src/main/resources/i18n/`. `Accept-Language: fa` selects Persian. Internal stack traces are never sent to clients. The domain uses structured `ApplicationException` values rather than embedding user-facing text in application logic.
+
+## Remaining work
+
+1. Implement `BalanceService` and correct credit/debit behavior with positive-amount validation and overflow protection.
+2. Implement atomic transfer, row-level lock acquisition order, and deadlock-related tests.
+3. Implement transactional idempotency and request mismatch detection.
+4. Add multi-threaded integration tests covering duplicate requests, overdrafts, transfer invariants, and failure rollback.
+5. Finalize engineering trade-offs and automated CI once all business operations are implemented.
+
+## Suggested commit
+
+```text
+feat: establish PostgreSQL persistence and account domain model
 ```
-
-Messages default to English; send `Accept-Language: fa` for Persian. Internal exception details are logged server-side, not returned to clients. Time is injected through a `Clock` for deterministic testing.
-
-**Scope of the shared handler:** it currently covers exceptions reaching MVC exception handling. When business REST endpoints are introduced, request validation, unknown routes, and unsupported methods will also receive end-to-end HTTP coverage.
-
-## Planned implementation
-
-1. Domain model, database schema, migrations, and repository.
-2. Credit and debit operations with monetary constraints.
-3. Account-level concurrency and transfer atomicity.
-4. Idempotency with persisted transaction identity and request consistency.
-5. Concurrency tests, fault tests, technical design notes, and CI.
-
-## Architecture and trade-offs (current state)
-
-- Spring Boot is an intentionally small runtime foundation.
-- Java `long` is required by the challenge's service interface. Amount positivity and overflow safety will be enforced within the domain implementation.
-- No database is configured in Step 1; selecting PostgreSQL and a locking strategy is deferred until those choices are implemented and tested.
-- An actuator health endpoint supports basic runtime verification without introducing a placeholder business API.
-- The shared exception contract is prepared before business endpoints, avoiding inconsistent error payloads across future operations.
-
-## Submission readiness
-
-This repository is **not ready for challenge submission at Step 1**. The financial operations and concurrency guarantees required by the challenge remain to be implemented and verified.

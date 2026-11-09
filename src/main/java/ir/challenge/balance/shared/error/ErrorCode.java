@@ -3,6 +3,11 @@ package ir.challenge.balance.shared.error;
 import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
+    INVALID_ACCOUNT_ID(HttpStatus.BAD_REQUEST, "error.invalid_account_id"),
+    INVALID_AMOUNT(HttpStatus.BAD_REQUEST, "error.invalid_amount"),
+    ACCOUNT_NOT_FOUND(HttpStatus.NOT_FOUND, "error.account_not_found"),
+    INSUFFICIENT_FUNDS(HttpStatus.CONFLICT, "error.insufficient_funds"),
+    IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "error.idempotency_conflict"),
     INVALID_REQUEST(HttpStatus.BAD_REQUEST, "error.invalid_request"),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "error.resource_not_found"),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "error.method_not_allowed"),
